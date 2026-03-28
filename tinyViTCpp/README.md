@@ -13,4 +13,3 @@ cmake --build build -j2
 
 ./build/train_tinyvit_hier
 ```
-

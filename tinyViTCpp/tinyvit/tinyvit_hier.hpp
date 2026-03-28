@@ -12,7 +12,8 @@
 
 #include <torch/torch.h>
 
-namespace Marr {
+namespace marr {
+namespace tinyvit {
 
 using torch::indexing::Slice;
 
@@ -521,8 +522,6 @@ inline std::string class_name(int64_t label) {
       return "center_square";
   }
 }
-
-} // namespace Marr
-
-
+} // namespace tinyvit
+} // namespace marr
 #endif
