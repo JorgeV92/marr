@@ -263,6 +263,70 @@ struct WindowAttentionImpl : torch::nn::Module {
 };
 TORCH_MODULE(WindowAttention);
 
+struct TinyViTBlockImpl : torch::nn::Module {
+  TinyViTBlockImpl(int64_t dim,
+                   int64_t num_heads,
+                   int64_t window_size,
+                   int64_t mlp_ratio)
+      : dim_(dim),
+        window_size_(window_size),
+        attn(register_module("attn", WindowAttention(dim, num_heads, window_size))),
+        local_conv(register_module(
+            "local_conv",
+            ConvBNAct(dim, dim, 3, 1, 1, dim, false))),
+        mlp(register_module("mlp", Mlp(dim, mlp_ratio))) {}
+
+  torch::Tensor forward(const torch::Tensor& tokens, int64_t H, int64_t W) {
+    const auto B = tokens.size(0);
+    const auto C = tokens.size(2);
+    auto x = tokens.view({B, H, W, C});
+
+    const int64_t pad_h = (window_size_ - H % window_size_) % window_size_;
+    const int64_t pad_w = (window_size_ - W % window_size_) % window_size_;
+    if (pad_h > 0 || pad_w > 0) {
+      x = torch::constant_pad_nd(x, {0, 0, 0, pad_w, 0, pad_h}, 0.0);
+    }
+
+    const int64_t Hp = H + pad_h;
+    const int64_t Wp = W + pad_w;
+    const int64_t nH = Hp / window_size_;
+    const int64_t nW = Wp / window_size_;
+    const int64_t window_tokens = window_size_ * window_size_;
+
+    auto windows = x.view({B, nH, window_size_, nW, window_size_, C})
+                       .permute({0, 1, 3, 2, 4, 5})
+                       .contiguous()
+                       .view({B * nH * nW, window_tokens, C});
+
+    auto attn_out = attn->forward(windows);
+    attn_out = attn_out.view({B, nH, nW, window_size_, window_size_, C})
+                   .permute({0, 1, 3, 2, 4, 5})
+                   .contiguous()
+                   .view({B, Hp, Wp, C});
+
+    if (pad_h > 0 || pad_w > 0) {
+      attn_out = attn_out.index({Slice(), Slice(0, H), Slice(0, W), Slice()});
+    }
+
+    auto y = tokens + attn_out.view({B, H * W, C});
+
+    auto local = y.transpose(1, 2).contiguous().view({B, C, H, W});
+    local = local_conv->forward(local);
+    local = local.view({B, C, H * W}).transpose(1, 2).contiguous();
+
+    y = y + local;
+    y = y + mlp->forward(y);
+    return y;
+  }
+
+  int64_t dim_;
+  int64_t window_size_;
+  WindowAttention attn{nullptr};
+  ConvBNAct local_conv{nullptr};
+  Mlp mlp{nullptr};
+};
+TORCH_MODULE(TinyViTBlock);
+
 } // namespace Marr
 
 
