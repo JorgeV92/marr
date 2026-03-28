@@ -14,7 +14,7 @@
 
 namespace Marr {
 
-using toorch::indexing::Slice;
+using torch::indexing::Slice;
 
 struct TinyViTConfig {
   int64_t image_size = 32;
@@ -326,6 +326,201 @@ struct TinyViTBlockImpl : torch::nn::Module {
   Mlp mlp{nullptr};
 };
 TORCH_MODULE(TinyViTBlock);
+
+struct TransformerStageImpl : torch::nn::Module {
+  TransformerStageImpl(int64_t dim,
+                       int64_t depth,
+                       int64_t num_heads,
+                       int64_t window_size,
+                       int64_t mlp_ratio)
+      : blocks(register_module("blocks", torch::nn::ModuleList())) {
+    for (int64_t i = 0; i < depth; ++i) {
+      blocks->push_back(TinyViTBlock(dim, num_heads, window_size, mlp_ratio));
+    }
+  }
+
+  torch::Tensor forward(torch::Tensor x, int64_t H, int64_t W) {
+    for (auto& block : *blocks) {
+      x = block->as<TinyViTBlock>()->forward(x, H, W);
+    }
+    return x;
+  }
+
+  torch::nn::ModuleList blocks{nullptr};
+};
+TORCH_MODULE(TransformerStage);
+
+inline torch::Tensor flatten_hw_to_tokens(const torch::Tensor& x) {
+  return x.flatten(2).transpose(1, 2).contiguous();  // [B, C, H, W] -> [B, H*W, C]
+}
+
+inline torch::Tensor tokens_to_feature_map(const torch::Tensor& x, int64_t H, int64_t W) {
+  return x.transpose(1, 2).contiguous().view({x.size(0), x.size(2), H, W});
+}
+
+struct TinyViTHierarchicalImpl : torch::nn::Module {
+  explicit TinyViTHierarchicalImpl(const TinyViTConfig& cfg)
+      : cfg_(cfg),
+        stem(register_module("stem", ConvStem(cfg.in_channels, cfg.embed_dims[0]))),
+        stage1(register_module("stage1", ConvStage(cfg.embed_dims[0], cfg.depths[0]))),
+        merge1(register_module("merge1", PatchMerging(cfg.embed_dims[0], cfg.embed_dims[1]))),
+        stage2(register_module("stage2",
+                               TransformerStage(cfg.embed_dims[1],
+                                                cfg.depths[1],
+                                                cfg.num_heads[1],
+                                                cfg.window_size,
+                                                cfg.mlp_ratio))),
+        merge2(register_module("merge2", PatchMerging(cfg.embed_dims[1], cfg.embed_dims[2]))),
+        stage3(register_module("stage3",
+                               TransformerStage(cfg.embed_dims[2],
+                                                cfg.depths[2],
+                                                cfg.num_heads[2],
+                                                std::max<int64_t>(2, cfg.window_size / 2),
+                                                cfg.mlp_ratio))),
+        merge3(register_module("merge3", PatchMerging(cfg.embed_dims[2], cfg.embed_dims[3]))),
+        stage4(register_module("stage4",
+                               TransformerStage(cfg.embed_dims[3],
+                                                cfg.depths[3],
+                                                cfg.num_heads[3],
+                                                1,
+                                                cfg.mlp_ratio))),
+        norm_head(register_module(
+            "norm_head",
+            torch::nn::LayerNorm(torch::nn::LayerNormOptions(
+                std::vector<int64_t>{cfg.embed_dims.back()})))),
+        head(register_module("head", torch::nn::Linear(cfg.embed_dims.back(), cfg.num_classes))) {
+    cfg_.validate();
+  }
+
+  torch::Tensor forward_features(const torch::Tensor& x) {
+    // Stem: [B, C, H, W] -> [B, D0, H/4, W/4]
+    auto y = stem->forward(x);
+    y = stage1->forward(y);
+
+    // Merge 1: [B, D0, H/4, W/4] -> [B, D1, H/8, W/8]
+    y = merge1->forward(y);
+    int64_t H = y.size(2);
+    int64_t W = y.size(3);
+    auto tokens = flatten_hw_to_tokens(y);                      // [B, H*W, D1]
+
+    // Stages 2-4 operate on tokens with local window attention.
+    tokens = stage2->forward(tokens, H, W);
+
+    y = tokens_to_feature_map(tokens, H, W);
+    y = merge2->forward(y);
+    H = y.size(2);
+    W = y.size(3);
+    tokens = flatten_hw_to_tokens(y);
+    tokens = stage3->forward(tokens, H, W);
+
+    y = tokens_to_feature_map(tokens, H, W);
+    y = merge3->forward(y);
+    H = y.size(2);
+    W = y.size(3);
+    tokens = flatten_hw_to_tokens(y);
+    tokens = stage4->forward(tokens, H, W);
+
+    // Official TinyViT uses mean pooling over tokens instead of a CLS token.
+    auto pooled = tokens.mean(1);                               // [B, D_last]
+    pooled = norm_head->forward(pooled);
+    return pooled;
+  }
+
+  torch::Tensor forward(const torch::Tensor& x) {
+    return head->forward(forward_features(x));
+  }
+
+  void print_summary() const {
+    std::cout << "TinyViT-style hierarchical C++ model\n"
+              << "  image_size:   " << cfg_.image_size << "\n"
+              << "  embed_dims:   [" << cfg_.embed_dims[0] << ", " << cfg_.embed_dims[1]
+              << ", " << cfg_.embed_dims[2] << ", " << cfg_.embed_dims[3] << "]\n"
+              << "  depths:       [" << cfg_.depths[0] << ", " << cfg_.depths[1]
+              << ", " << cfg_.depths[2] << ", " << cfg_.depths[3] << "]\n"
+              << "  heads:        [" << cfg_.num_heads[0] << ", " << cfg_.num_heads[1]
+              << ", " << cfg_.num_heads[2] << ", " << cfg_.num_heads[3] << "]\n"
+              << "  window_size:  " << cfg_.window_size << "\n"
+              << "  classifier:   global token mean -> linear head\n";
+  }
+
+  TinyViTConfig cfg_;
+  ConvStem stem{nullptr};
+  ConvStage stage1{nullptr};
+  PatchMerging merge1{nullptr};
+  TransformerStage stage2{nullptr};
+  PatchMerging merge2{nullptr};
+  TransformerStage stage3{nullptr};
+  PatchMerging merge3{nullptr};
+  TransformerStage stage4{nullptr};
+  torch::nn::LayerNorm norm_head{nullptr};
+  torch::nn::Linear head{nullptr};
+};
+TORCH_MODULE(TinyViTHierarchical);
+
+inline torch::Tensor make_pattern_image(int64_t label,
+                                        int64_t image_size = 32,
+                                        double noise_std = 0.05) {
+  auto img = torch::zeros({1, image_size, image_size}, torch::kFloat32);
+
+  for (int64_t r = 0; r < image_size; ++r) {
+    for (int64_t c = 0; c < image_size; ++c) {
+      float value = 0.0f;
+      if (label == 0) {
+        value = (c / 2) % 2 == 0 ? 1.0f : 0.0f;                         // vertical stripes
+      } else if (label == 1) {
+        value = (r / 2) % 2 == 0 ? 1.0f : 0.0f;                         // horizontal stripes
+      } else if (label == 2) {
+        value = ((r / 2 + c / 2) % 2 == 0) ? 1.0f : 0.0f;              // checkerboard
+      } else {
+        const int64_t lo = image_size / 4;
+        const int64_t hi = image_size - lo;
+        value = (r >= lo && r < hi && c >= lo && c < hi) ? 1.0f : 0.0f;  // center square
+      }
+      img[0][r][c] = value;
+    }
+  }
+
+  img = img + torch::randn_like(img) * noise_std;
+  img = torch::clamp(img, 0.0, 1.0);
+  return img;
+}
+
+inline std::pair<torch::Tensor, torch::Tensor> make_toy_dataset(int64_t count,
+                                                                int64_t num_classes = 4,
+                                                                int64_t image_size = 32) {
+  std::vector<torch::Tensor> images;
+  std::vector<int64_t> labels;
+  images.reserve(static_cast<size_t>(count));
+  labels.reserve(static_cast<size_t>(count));
+
+  for (int64_t i = 0; i < count; ++i) {
+    const int64_t label = i % num_classes;
+    images.push_back(make_pattern_image(label, image_size));
+    labels.push_back(label);
+  }
+
+  auto x = torch::stack(images, 0);
+  auto y = torch::tensor(labels, torch::TensorOptions().dtype(torch::kLong));
+  return {x, y};
+}
+
+inline double accuracy(const torch::Tensor& logits, const torch::Tensor& labels) {
+  auto pred = logits.argmax(1);
+  return pred.eq(labels).to(torch::kFloat32).mean().item<double>();
+}
+
+inline std::string class_name(int64_t label) {
+  switch (label) {
+    case 0:
+      return "vertical_stripes";
+    case 1:
+      return "horizontal_stripes";
+    case 2:
+      return "checkerboard";
+    default:
+      return "center_square";
+  }
+}
 
 } // namespace Marr
 
