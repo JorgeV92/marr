@@ -1,6 +1,6 @@
 # marrvision transforms v2
 
-This directory is the C++/LibTorch start of a `torchvision.transforms.v2`-style
+This package is the C++/LibTorch start of a `torchvision.transforms.v2`-style
 API for marrvision.
 
 The public namespace is:
@@ -26,9 +26,9 @@ The first pass is intentionally tensor-first:
 Build:
 
 ```bash
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/libtorch
-cmake --build build
-ctest --test-dir build
+cmake -S vision -B vision/build -DCMAKE_PREFIX_PATH=/path/to/libtorch
+cmake --build vision/build
+ctest --test-dir vision/build
 ```
 
 Example:
