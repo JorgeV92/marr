@@ -1,14 +1,16 @@
-# marrvision transforms v2
+# marrvision
 
-This package is the C++/LibTorch start of a `torchvision.transforms.v2`-style
-API for marrvision.
+This package is the start of marrvision's C++/LibTorch vision APIs plus a small
+Python dataset layer.
 
 The public namespace is:
 
 ```cpp
 #include <marrvision/transforms/v2.hpp>
+#include <marrvision/datasets.hpp>
 
 namespace v2 = marr::vision::transforms::v2;
+namespace datasets = marr::vision::datasets;
 ```
 
 The first pass is intentionally tensor-first:
@@ -22,6 +24,8 @@ The first pass is intentionally tensor-first:
   shaped around the same API surface.
 - Backends that need PIL, CVCUDA, image codecs, or torchvision `tv_tensors`
   metadata currently throw `NotImplementedError`.
+- `datasets::MNIST` reads the same extracted IDX files as torchvision from
+  `root/MNIST/raw`. Downloading is not implemented yet in C++.
 
 Build:
 
@@ -47,4 +51,30 @@ auto pipeline = v2::Compose({
 
 auto image = torch::randint(0, 256, {3, 256, 256}, torch::kUInt8);
 auto output = pipeline.forward(image);
+```
+
+MNIST dataset example:
+
+```cpp
+datasets::MNIST mnist("/path/to/data", true);
+auto sample = mnist.get(0);
+
+auto image = sample.data;   // uint8 tensor, [1, H, W]
+auto target = sample.target.item<int64_t>();
+```
+
+Python dataset example:
+
+```python
+from marrvision.datasets import MNIST
+
+mnist = MNIST("/path/to/data", train=True, download=True)
+image, target = mnist[0]  # uint8 tensor [1, H, W], integer target
+```
+
+From the repository root, add `vision` to `PYTHONPATH` when using the Python
+package directly:
+
+```bash
+PYTHONPATH=vision python vision/examples/python_mnist_dataset.py /path/to/data --download
 ```
