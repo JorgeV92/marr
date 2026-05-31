@@ -5,8 +5,6 @@ This is a repo that holds different sections for working with deep learning mode
 ### C++ tensor
 
 Marr provides a small CPU-only C++20 tensor library through `marr::Tensor<T>`.
-The API is inspired by a tiny subset of PyTorch-style tensor APIs, but it is
-not trying to be fully compatible with PyTorch.
 
 ```cpp
 #include <iostream>
