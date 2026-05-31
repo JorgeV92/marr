@@ -1,6 +1,7 @@
 #pragma once
 
 #include <marr/tensor_core.hpp>
+#include <marr/parallel.hpp>
 #include <marr/shape.hpp>
 #include <marr/indexing.hpp>
 #include <marr/factory.hpp>

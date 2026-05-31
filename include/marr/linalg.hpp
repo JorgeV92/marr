@@ -7,6 +7,7 @@
 #include <utility>
 
 #include <marr/autograd.hpp>
+#include <marr/detail/parallel_for.hpp>
 #include <marr/tensor_core.hpp>
 
 namespace marr {
@@ -57,15 +58,17 @@ Tensor<T> mm(const Tensor<T>& lhs, const Tensor<T>& rhs)
     const std::int64_t columns = rhs.size(1);
     Tensor<T> result({rows, columns}, T{});
 
-    for (std::int64_t row = 0; row < rows; ++row) {
-        for (std::int64_t column = 0; column < columns; ++column) {
-            T sum{};
-            for (std::int64_t index = 0; index < inner; ++index) {
-                sum += lhs(row, index) * rhs(index, column);
-            }
-            result(row, column) = sum;
+    // Use one task per output element; each index writes a distinct result cell.
+    detail::parallel_for(0, rows * columns, [&](std::int64_t flat) {
+        const std::int64_t row = flat / columns;
+        const std::int64_t column = flat % columns;
+
+        T sum{};
+        for (std::int64_t index = 0; index < inner; ++index) {
+            sum += lhs(row, index) * rhs(index, column);
         }
-    }
+        result(row, column) = sum;
+    });
 
     if (detail::grad_enabled() && (lhs.requires_grad() || rhs.requires_grad())) {
         auto node = std::make_shared<AutogradNode<T>>();

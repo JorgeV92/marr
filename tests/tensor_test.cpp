@@ -661,6 +661,126 @@ void test_phase7_no_grad_guard()
     }
 }
 
+void test_phase8_parallel_config()
+{
+    const auto original_threads = marr::get_num_threads();
+    const bool original_enabled = marr::is_parallel_enabled();
+
+    CHECK(original_threads >= 1);
+
+    marr::set_num_threads(1);
+    CHECK(marr::get_num_threads() == 1);
+
+    marr::set_num_threads(4);
+    CHECK(marr::get_num_threads() == 4);
+
+    marr::set_parallel_enabled(false);
+    CHECK(!marr::is_parallel_enabled());
+
+    marr::set_parallel_enabled(true);
+    CHECK(marr::is_parallel_enabled());
+
+    {
+        marr::NoParallelGuard guard;
+        CHECK(!marr::is_parallel_enabled());
+    }
+    CHECK(marr::is_parallel_enabled());
+
+    marr::set_num_threads(original_threads);
+    marr::set_parallel_enabled(original_enabled);
+}
+
+void test_phase8_parallel_elementwise_correctness()
+{
+    marr::set_parallel_enabled(true);
+    marr::set_num_threads(4);
+
+    const auto a = marr::ones<float>({10000});
+    const auto b = marr::full<float>({10000}, 2.0f);
+    const marr::Tensor<float> c = a + b;
+
+    CHECK((c.sizes() == marr::Sizes{10000}));
+    for (std::int64_t i = 0; i < c.numel(); ++i) {
+        CHECK(c[i] == 3.0f);
+    }
+}
+
+void test_phase8_parallel_expression_templates()
+{
+    marr::set_parallel_enabled(true);
+    marr::set_num_threads(4);
+
+    const auto a = marr::ones<float>({10000});
+    const auto b = marr::full<float>({10000}, 2.0f);
+    const auto y = marr::eval(a + b * 2.0f - 1.0f);
+
+    CHECK((y.sizes() == marr::Sizes{10000}));
+    for (std::int64_t i = 0; i < y.numel(); ++i) {
+        CHECK(y[i] == 4.0f);
+    }
+}
+
+void test_phase8_parallel_broadcasting()
+{
+    marr::set_parallel_enabled(true);
+    marr::set_num_threads(4);
+
+    const auto a = marr::ones<float>({100, 100});
+    const auto b = marr::full<float>({100}, 2.0f);
+    const marr::Tensor<float> c = a + b;
+
+    CHECK((c.sizes() == marr::Sizes{100, 100}));
+    for (std::int64_t i = 0; i < c.numel(); ++i) {
+        CHECK(c[i] == 3.0f);
+    }
+}
+
+void test_phase8_parallel_sum_and_mean()
+{
+    marr::set_parallel_enabled(true);
+    marr::set_num_threads(4);
+
+    const auto x = marr::ones<float>({100000});
+
+    check_tensor_values(marr::sum(x), {100000.0f});
+    check_tensor_values(marr::mean(x), {1.0f});
+}
+
+void test_phase8_parallel_mm()
+{
+    marr::set_parallel_enabled(true);
+    marr::set_num_threads(4);
+
+    const auto a = marr::ones<float>({64, 128});
+    const auto b = marr::ones<float>({128, 32});
+    const auto c = marr::mm(a, b);
+
+    CHECK((c.sizes() == marr::Sizes{64, 32}));
+    for (std::int64_t i = 0; i < c.numel(); ++i) {
+        CHECK(c[i] == 128.0f);
+    }
+}
+
+void test_phase8_single_thread_fallback()
+{
+    marr::set_parallel_enabled(true);
+    marr::set_num_threads(1);
+
+    const auto a = marr::ones<float>({10000});
+    const auto b = marr::full<float>({10000}, 2.0f);
+    const auto c = marr::eval(a + b * 2.0f - 1.0f);
+
+    for (std::int64_t i = 0; i < c.numel(); ++i) {
+        CHECK(c[i] == 4.0f);
+    }
+
+    const auto x = marr::ones<float>({100000});
+    check_tensor_values(marr::sum(x), {100000.0f});
+    check_tensor_values(marr::mean(x), {1.0f});
+
+    marr::set_num_threads(4);
+}
+
 void test_factories()
 {
     const auto zero_tensor = marr::zeros<int>({2, 2});
@@ -721,6 +841,13 @@ int main()
     test_phase7_sum_to_shape();
     test_phase7_autograd_mm_gradient();
     test_phase7_no_grad_guard();
+    test_phase8_parallel_config();
+    test_phase8_parallel_elementwise_correctness();
+    test_phase8_parallel_expression_templates();
+    test_phase8_parallel_broadcasting();
+    test_phase8_parallel_sum_and_mean();
+    test_phase8_parallel_mm();
+    test_phase8_single_thread_fallback();
     test_factories();
 
     if (failures != 0) {

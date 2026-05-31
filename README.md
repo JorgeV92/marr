@@ -90,6 +90,45 @@ subset: elementwise add/subtract/multiply/divide, negation, ReLU, `sum`, `mean`,
 2D `mm`, `transpose`, `detach`, and `NoGradGuard`. Autograd expressions are
 materialized when evaluated for now; matrix multiplication remains eager.
 
+## Phase 8: Parallel CPU Backend
+
+Large tensor loops can run in parallel on the CPU. The public include remains:
+
+```cpp
+#include <marr/tensor.hpp>
+```
+
+Users can control the simple CPU backend with:
+
+```cpp
+#include <marr/tensor.hpp>
+#include <iostream>
+
+int main() {
+    marr::set_num_threads(4);
+
+    auto a = marr::ones<float>({1000, 1000});
+    auto b = marr::full<float>({1000, 1000}, 2.0f);
+
+    auto c = a + b;
+
+    std::cout << c(0, 0) << "\n";
+}
+```
+
+Parallel execution is enabled by default. The default thread count is
+`std::thread::hardware_concurrency()`, or `1` if that value is unavailable. Use
+`marr::set_parallel_enabled(false)` to disable parallel execution globally.
+
+For a scoped single-threaded section:
+
+```cpp
+{
+    marr::NoParallelGuard guard;
+    auto y = x + x; // runs single-threaded in this scope
+}
+```
+
 ### Computer vision 
 
 **tinyViT**

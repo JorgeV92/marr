@@ -1,10 +1,14 @@
 #pragma once
 
 #include <concepts>
+#include <cstdint>
+#include <algorithm>
 #include <memory>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
+#include <marr/detail/parallel_for.hpp>
 #include <marr/expr.hpp>
 
 namespace marr {
@@ -210,8 +214,23 @@ Tensor<T> sum_tensor_impl(
     }
 
     T total{};
-    for (std::int64_t flat = 0; flat < input.numel(); ++flat) {
-        total += input[flat];
+    if (should_parallelize(input.numel())) {
+        const std::int64_t workers = parallel_worker_count(input.numel());
+        const std::int64_t chunk_size = (input.numel() + workers - 1) / workers;
+        std::vector<T> partials(static_cast<std::size_t>(workers), T{});
+
+        parallel_for(0, input.numel(), [&](std::int64_t flat) {
+            const std::int64_t worker = std::min<std::int64_t>(flat / chunk_size, workers - 1);
+            partials[static_cast<std::size_t>(worker)] += input[flat];
+        });
+
+        for (const T& partial : partials) {
+            total += partial;
+        }
+    } else {
+        for (std::int64_t flat = 0; flat < input.numel(); ++flat) {
+            total += input[flat];
+        }
     }
 
     Tensor<T> result({}, total * scale);

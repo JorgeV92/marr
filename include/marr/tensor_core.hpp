@@ -266,6 +266,8 @@ public:
         }
 
         Tensor& current_grad = mutable_grad();
+        // Gradient accumulation stays single-threaded to avoid racing writes when
+        // multiple autograd paths contribute to the same tensor.
         for (std::int64_t i = 0; i < current_grad.numel(); ++i) {
             current_grad[i] += incoming_grad[i];
         }

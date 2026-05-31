@@ -11,6 +11,7 @@
 
 #include <marr/autograd.hpp>
 #include <marr/broadcast.hpp>
+#include <marr/detail/parallel_for.hpp>
 #include <marr/indexing.hpp>
 #include <marr/tensor_core.hpp>
 
@@ -566,9 +567,9 @@ auto eval(const Expr& expr) -> Tensor<typename std::remove_cvref_t<Expr>::value_
     using T = typename std::remove_cvref_t<Expr>::value_type;
     auto expression = detail::as_operand(expr);
     Tensor<T> result(expression.sizes());
-    for (std::int64_t flat = 0; flat < result.numel(); ++flat) {
+    detail::parallel_for(0, result.numel(), [&](std::int64_t flat) {
         result[flat] = static_cast<T>(expression.value_at_flat_index(flat));
-    }
+    });
 
     if (detail::grad_enabled() && detail::expression_requires_grad(expression)) {
         auto node = std::make_shared<AutogradNode<T>>();
