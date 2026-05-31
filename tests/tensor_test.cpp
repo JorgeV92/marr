@@ -37,12 +37,15 @@ void check_throws(Function function, std::string_view label)
     ++failures;
 }
 
-template <typename T>
-void check_tensor_values(const marr::Tensor<T>& tensor, const std::vector<T>& expected)
+template <typename Expr, typename Expected>
+void check_tensor_values(const Expr& expression, std::initializer_list<Expected> expected)
 {
+    const auto tensor = marr::eval(expression);
     CHECK(tensor.numel() == static_cast<std::int64_t>(expected.size()));
-    for (std::int64_t i = 0; i < tensor.numel(); ++i) {
-        CHECK(tensor[i] == expected[static_cast<std::size_t>(i)]);
+    std::int64_t i = 0;
+    for (const auto& expected_value : expected) {
+        CHECK(tensor[i] == static_cast<typename decltype(tensor)::value_type>(expected_value));
+        ++i;
     }
 }
 
@@ -221,7 +224,7 @@ void test_phase4_broadcasting_matrix_with_vector()
     const marr::Tensor<float> a({2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
     const marr::Tensor<float> b({3}, std::vector<float>{10, 20, 30});
 
-    const auto c = a + b;
+    const auto c = marr::eval(a + b);
     CHECK((c.sizes() == marr::Sizes{2, 3}));
     check_tensor_values(c, {11, 22, 33, 14, 25, 36});
 }
@@ -248,7 +251,7 @@ void test_phase4_broadcasting_three_dimensions()
         }
     );
 
-    const auto c = a + b;
+    const auto c = marr::eval(a + b);
     CHECK((c.sizes() == marr::Sizes{4, 5, 3}));
     CHECK(c(0, 0, 0) == 101);
     CHECK(c(0, 4, 2) == 1503);
@@ -288,6 +291,191 @@ void test_phase4_incompatible_shapes_throw()
     check_throws<std::invalid_argument>([&] { (void)(a + b); }, "incompatible broadcast");
 }
 
+void test_phase5_mm()
+{
+    const auto a = marr::full<float>({2, 3}, 2.0f);
+    const auto b = marr::ones<float>({3, 4});
+
+    const auto c = marr::mm(a, b);
+    CHECK((c.sizes() == marr::Sizes{2, 4}));
+    check_tensor_values(c, {6.0f, 6.0f, 6.0f, 6.0f, 6.0f, 6.0f, 6.0f, 6.0f});
+}
+
+void test_phase5_invalid_mm_dimensions()
+{
+    const marr::Tensor<float> vector({3});
+    const marr::Tensor<float> matrix({3, 2});
+    const marr::Tensor<float> bad_inner({4, 2});
+
+    check_throws<std::invalid_argument>(
+        [&] { (void)marr::mm(vector, matrix); },
+        "mm non-2D lhs"
+    );
+    check_throws<std::invalid_argument>(
+        [&] { (void)marr::mm(matrix, bad_inner); },
+        "mm inner dimension mismatch"
+    );
+}
+
+void test_phase5_matmul_vector_vector()
+{
+    const marr::Tensor<float> a({3}, std::vector<float>{1, 2, 3});
+    const marr::Tensor<float> b({3}, std::vector<float>{4, 5, 6});
+
+    const auto c = marr::matmul(a, b);
+    CHECK(c.sizes().empty());
+    check_tensor_values(c, {32.0f});
+}
+
+void test_phase5_matmul_matrix_vector()
+{
+    const marr::Tensor<float> a({2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    const marr::Tensor<float> b({3}, std::vector<float>{1, 2, 3});
+
+    const auto c = marr::matmul(a, b);
+    CHECK((c.sizes() == marr::Sizes{2}));
+    check_tensor_values(c, {14.0f, 32.0f});
+}
+
+void test_phase5_matmul_vector_matrix()
+{
+    const marr::Tensor<float> a({2}, std::vector<float>{1, 2});
+    const marr::Tensor<float> b({2, 3}, std::vector<float>{3, 4, 5, 6, 7, 8});
+
+    const auto c = marr::matmul(a, b);
+    CHECK((c.sizes() == marr::Sizes{3}));
+    check_tensor_values(c, {15.0f, 18.0f, 21.0f});
+}
+
+void test_phase5_matmul_matrix_matrix()
+{
+    const marr::Tensor<float> a({2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    const marr::Tensor<float> b({3, 2}, std::vector<float>{7, 8, 9, 10, 11, 12});
+
+    const auto c = marr::matmul(a, b);
+    CHECK((c.sizes() == marr::Sizes{2, 2}));
+    check_tensor_values(c, {58.0f, 64.0f, 139.0f, 154.0f});
+}
+
+void test_phase5_matmul_batched_matrix_matrix()
+{
+    const marr::Tensor<float> a(
+        {2, 2, 3},
+        std::vector<float>{
+            1, 2, 3,
+            4, 5, 6,
+            1, 0, 1,
+            0, 1, 0,
+        }
+    );
+    const marr::Tensor<float> b(
+        {2, 3, 2},
+        std::vector<float>{
+            7, 8,
+            9, 10,
+            11, 12,
+            2, 3,
+            4, 5,
+            6, 7,
+        }
+    );
+
+    const auto c = marr::matmul(a, b);
+    CHECK((c.sizes() == marr::Sizes{2, 2, 2}));
+    check_tensor_values(c, {58.0f, 64.0f, 139.0f, 154.0f, 8.0f, 10.0f, 4.0f, 5.0f});
+}
+
+void test_phase6_eval_binary_operations()
+{
+    const marr::Tensor<float> a({2, 2}, std::vector<float>{8, 12, 16, 20});
+    const marr::Tensor<float> b({2, 2}, std::vector<float>{2, 3, 4, 5});
+
+    check_tensor_values(marr::eval(a + b), {10.0f, 15.0f, 20.0f, 25.0f});
+    check_tensor_values(marr::eval(a - b), {6.0f, 9.0f, 12.0f, 15.0f});
+    check_tensor_values(marr::eval(a * b), {16.0f, 36.0f, 64.0f, 100.0f});
+    check_tensor_values(marr::eval(a / b), {4.0f, 4.0f, 4.0f, 4.0f});
+}
+
+void test_phase6_eval_scalar_operations()
+{
+    const marr::Tensor<float> a({2, 2}, std::vector<float>{1, 2, 3, 4});
+
+    check_tensor_values(marr::eval(a + 2.0f), {3.0f, 4.0f, 5.0f, 6.0f});
+    check_tensor_values(marr::eval(2.0f + a), {3.0f, 4.0f, 5.0f, 6.0f});
+    check_tensor_values(marr::eval(a - 2.0f), {-1.0f, 0.0f, 1.0f, 2.0f});
+    check_tensor_values(marr::eval(2.0f - a), {1.0f, 0.0f, -1.0f, -2.0f});
+    check_tensor_values(marr::eval(a * 2.0f), {2.0f, 4.0f, 6.0f, 8.0f});
+    check_tensor_values(marr::eval(2.0f * a), {2.0f, 4.0f, 6.0f, 8.0f});
+    check_tensor_values(marr::eval(a / 2.0f), {0.5f, 1.0f, 1.5f, 2.0f});
+    check_tensor_values(marr::eval(8.0f / a), {8.0f, 4.0f, 8.0f / 3.0f, 2.0f});
+}
+
+void test_phase6_eval_unary_operations()
+{
+    const marr::Tensor<float> a({4}, std::vector<float>{-2, -1, 0, 3});
+
+    check_tensor_values(marr::eval(-a), {2.0f, 1.0f, -0.0f, -3.0f});
+    check_tensor_values(marr::eval(marr::relu(a)), {0.0f, 0.0f, 0.0f, 3.0f});
+}
+
+void test_phase6_eval_nested_expressions()
+{
+    const marr::Tensor<float> a({2, 2}, std::vector<float>{1, 2, 3, 4});
+    const marr::Tensor<float> b({2, 2}, std::vector<float>{5, 6, 7, 8});
+    const marr::Tensor<float> c({2, 2}, std::vector<float>{2, 3, 4, 5});
+
+    check_tensor_values(marr::eval(a + b * c), {11.0f, 20.0f, 31.0f, 44.0f});
+    check_tensor_values(marr::eval((a + b) * (c - 2.0f)), {0.0f, 8.0f, 20.0f, 36.0f});
+    check_tensor_values(marr::eval(marr::relu(a * 2.0f - b)), {0.0f, 0.0f, 0.0f, 0.0f});
+
+    marr::Tensor<float> converted = a + b * c - 2.0f;
+    check_tensor_values(converted, {9.0f, 18.0f, 29.0f, 42.0f});
+}
+
+void test_phase6_expression_broadcasting_matrix_with_vector()
+{
+    const auto a = marr::ones<float>({2, 3});
+    const auto b = marr::full<float>({3}, 2.0f);
+
+    const auto c = marr::eval(a + b);
+    CHECK((c.sizes() == marr::Sizes{2, 3}));
+    check_tensor_values(c, {3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f});
+
+    const auto y = marr::eval(a + b * 3.0f);
+    CHECK((y.sizes() == marr::Sizes{2, 3}));
+    check_tensor_values(y, {7.0f, 7.0f, 7.0f, 7.0f, 7.0f, 7.0f});
+}
+
+void test_phase6_expression_broadcasting_three_dimensions()
+{
+    const marr::Tensor<float> a(
+        {4, 1, 3},
+        std::vector<float>{
+            1, 2, 3,
+            4, 5, 6,
+            7, 8, 9,
+            10, 11, 12,
+        }
+    );
+    const marr::Tensor<float> b(
+        {1, 5, 3},
+        std::vector<float>{
+            100, 200, 300,
+            400, 500, 600,
+            700, 800, 900,
+            1000, 1100, 1200,
+            1300, 1400, 1500,
+        }
+    );
+
+    const auto c = marr::eval(a + b * 2.0f);
+    CHECK((c.sizes() == marr::Sizes{4, 5, 3}));
+    CHECK(c(0, 0, 0) == 201);
+    CHECK(c(0, 4, 2) == 3003);
+    CHECK(c(3, 0, 1) == 411);
+    CHECK(c(3, 4, 2) == 3012);
+}
+
 void test_factories()
 {
     const auto zero_tensor = marr::zeros<int>({2, 2});
@@ -322,6 +510,19 @@ int main()
     test_phase4_broadcasting_column_vector();
     test_phase4_scalar_broadcasting();
     test_phase4_incompatible_shapes_throw();
+    test_phase5_mm();
+    test_phase5_invalid_mm_dimensions();
+    test_phase5_matmul_vector_vector();
+    test_phase5_matmul_matrix_vector();
+    test_phase5_matmul_vector_matrix();
+    test_phase5_matmul_matrix_matrix();
+    test_phase5_matmul_batched_matrix_matrix();
+    test_phase6_eval_binary_operations();
+    test_phase6_eval_scalar_operations();
+    test_phase6_eval_unary_operations();
+    test_phase6_eval_nested_expressions();
+    test_phase6_expression_broadcasting_matrix_with_vector();
+    test_phase6_expression_broadcasting_three_dimensions();
     test_factories();
 
     if (failures != 0) {
