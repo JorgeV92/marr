@@ -5,6 +5,8 @@ This is a repo that holds different sections for working with deep learning mode
 ### C++ tensor
 
 Marr provides a small CPU-only C++20 tensor library through `marr::Tensor<T>`.
+Use `#include <marr/tensor.hpp>` as the main public include; it pulls in the
+smaller implementation headers under `include/marr/`.
 
 ```cpp
 #include <iostream>
@@ -51,6 +53,42 @@ marr::Tensor<float> z = x + y * 3.0f - 1.0f;
 Unevaluated expressions may hold references to tensor operands. Do not return or
 store lazy expressions that refer to local tensors after those tensors go out of
 scope.
+
+## Phase 7: Autograd
+
+Phase 7 adds a tiny dynamic autograd engine:
+
+```cpp
+#include <iostream>
+
+#include <marr/tensor.hpp>
+
+int main() {
+    auto x = marr::full<float>({3}, 2.0f);
+    x.set_requires_grad(true);
+
+    auto y = x * x + 2.0f * x;
+    auto loss = marr::sum(y);
+
+    loss.backward();
+
+    std::cout << x.grad() << "\n";
+}
+```
+
+The expected gradient is `{6, 6, 6}` because
+`d(x^2 + 2x)/dx = 2x + 2`, and `x = 2`.
+
+Autograd builds a dynamic computation graph as tensor operations run.
+`backward()` computes gradients from a scalar-like loss, and gradients
+accumulate on tensors with `requires_grad == true`. Call `zero_grad()` to clear
+stored gradients between optimization steps. Broadcasting gradients are reduced
+back to input shapes with `sum_to_shape`.
+
+This is inspired by PyTorch autograd, but it only implements a tiny CPU-only
+subset: elementwise add/subtract/multiply/divide, negation, ReLU, `sum`, `mean`,
+2D `mm`, `transpose`, `detach`, and `NoGradGuard`. Autograd expressions are
+materialized when evaluated for now; matrix multiplication remains eager.
 
 ### Computer vision 
 

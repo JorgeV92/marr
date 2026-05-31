@@ -476,6 +476,191 @@ void test_phase6_expression_broadcasting_three_dimensions()
     CHECK(c(3, 4, 2) == 3012);
 }
 
+void test_phase7_basic_autograd_state()
+{
+    auto x = marr::ones<float>({2, 2});
+    CHECK(!x.requires_grad());
+    CHECK(!x.has_grad());
+
+    x.set_requires_grad(true);
+    CHECK(x.requires_grad());
+
+    auto loss = marr::sum(x);
+    loss.backward();
+    CHECK(x.has_grad());
+    check_tensor_values(x.grad(), {1.0f, 1.0f, 1.0f, 1.0f});
+
+    x.zero_grad();
+    CHECK(!x.has_grad());
+
+    auto detached = x.detach();
+    CHECK(!detached.requires_grad());
+    CHECK(!detached.has_grad());
+    check_tensor_values(detached, {1.0f, 1.0f, 1.0f, 1.0f});
+
+    x.set_requires_grad(false);
+    CHECK(!x.requires_grad());
+}
+
+void test_phase7_autograd_addition()
+{
+    auto x = marr::full<float>({2, 2}, 2.0f);
+    auto y = marr::full<float>({2, 2}, 3.0f);
+    x.set_requires_grad(true);
+    y.set_requires_grad(true);
+
+    auto loss = marr::sum(x + y);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {1.0f, 1.0f, 1.0f, 1.0f});
+    check_tensor_values(y.grad(), {1.0f, 1.0f, 1.0f, 1.0f});
+}
+
+void test_phase7_autograd_subtraction()
+{
+    auto x = marr::full<float>({2, 2}, 2.0f);
+    auto y = marr::full<float>({2, 2}, 3.0f);
+    x.set_requires_grad(true);
+    y.set_requires_grad(true);
+
+    auto loss = marr::sum(x - y);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {1.0f, 1.0f, 1.0f, 1.0f});
+    check_tensor_values(y.grad(), {-1.0f, -1.0f, -1.0f, -1.0f});
+}
+
+void test_phase7_autograd_multiplication()
+{
+    auto x = marr::Tensor<float>({2, 2}, std::vector<float>{1, 2, 3, 4});
+    auto y = marr::Tensor<float>({2, 2}, std::vector<float>{5, 6, 7, 8});
+    x.set_requires_grad(true);
+    y.set_requires_grad(true);
+
+    auto loss = marr::sum(x * y);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {5.0f, 6.0f, 7.0f, 8.0f});
+    check_tensor_values(y.grad(), {1.0f, 2.0f, 3.0f, 4.0f});
+}
+
+void test_phase7_autograd_division()
+{
+    auto x = marr::Tensor<float>({2}, std::vector<float>{4, 9});
+    auto y = marr::Tensor<float>({2}, std::vector<float>{2, 3});
+    x.set_requires_grad(true);
+    y.set_requires_grad(true);
+
+    auto loss = marr::sum(x / y);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {1.0f / 2.0f, 1.0f / 3.0f});
+    check_tensor_values(y.grad(), {-1.0f, -1.0f});
+}
+
+void test_phase7_autograd_unary_negation()
+{
+    auto x = marr::ones<float>({3});
+    x.set_requires_grad(true);
+
+    auto loss = marr::sum(-x);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {-1.0f, -1.0f, -1.0f});
+}
+
+void test_phase7_autograd_relu()
+{
+    auto x = marr::Tensor<float>({5}, std::vector<float>{-2, -1, 0, 1, 2});
+    x.set_requires_grad(true);
+
+    auto loss = marr::sum(marr::relu(x));
+    loss.backward();
+
+    check_tensor_values(x.grad(), {0.0f, 0.0f, 0.0f, 1.0f, 1.0f});
+}
+
+void test_phase7_autograd_repeated_tensor_usage()
+{
+    auto x = marr::full<float>({2}, 3.0f);
+    x.set_requires_grad(true);
+
+    auto loss = marr::sum(x * x + x);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {7.0f, 7.0f});
+}
+
+void test_phase7_autograd_quadratic_expression()
+{
+    auto x = marr::Tensor<float>::ones({2, 2});
+    x.set_requires_grad(true);
+
+    auto y = x * x + 2.0f * x;
+    auto loss = marr::sum(y);
+    loss.backward();
+
+    check_tensor_values(x.grad(), {4.0f, 4.0f, 4.0f, 4.0f});
+}
+
+void test_phase7_autograd_broadcasting_gradient()
+{
+    auto x = marr::ones<float>({2, 3});
+    auto b = marr::ones<float>({3});
+    x.set_requires_grad(true);
+    b.set_requires_grad(true);
+
+    auto loss = marr::sum(x + b);
+    loss.backward();
+
+    CHECK((x.grad().sizes() == marr::Sizes{2, 3}));
+    CHECK((b.grad().sizes() == marr::Sizes{3}));
+    check_tensor_values(x.grad(), {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f});
+    check_tensor_values(b.grad(), {2.0f, 2.0f, 2.0f});
+}
+
+void test_phase7_sum_to_shape()
+{
+    const auto grad = marr::ones<float>({2, 3});
+
+    const auto vector_grad = marr::sum_to_shape(grad, {3});
+    CHECK((vector_grad.sizes() == marr::Sizes{3}));
+    check_tensor_values(vector_grad, {2.0f, 2.0f, 2.0f});
+
+    const auto scalar_grad = marr::sum_to_shape(grad, {});
+    CHECK(scalar_grad.sizes().empty());
+    check_tensor_values(scalar_grad, {6.0f});
+}
+
+void test_phase7_autograd_mm_gradient()
+{
+    auto a = marr::Tensor<float>({2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    auto b = marr::Tensor<float>({3, 2}, std::vector<float>{7, 8, 9, 10, 11, 12});
+    a.set_requires_grad(true);
+    b.set_requires_grad(true);
+
+    auto z = marr::mm(a, b);
+    auto loss = marr::sum(z);
+    loss.backward();
+
+    CHECK((a.grad().sizes() == a.sizes()));
+    CHECK((b.grad().sizes() == b.sizes()));
+    check_tensor_values(a.grad(), {15.0f, 19.0f, 23.0f, 15.0f, 19.0f, 23.0f});
+    check_tensor_values(b.grad(), {5.0f, 5.0f, 7.0f, 7.0f, 9.0f, 9.0f});
+}
+
+void test_phase7_no_grad_guard()
+{
+    auto x = marr::full<float>({2}, 3.0f);
+    x.set_requires_grad(true);
+
+    {
+        marr::NoGradGuard guard;
+        marr::Tensor<float> y = x * x;
+        CHECK(!y.requires_grad());
+    }
+}
+
 void test_factories()
 {
     const auto zero_tensor = marr::zeros<int>({2, 2});
@@ -523,6 +708,19 @@ int main()
     test_phase6_eval_nested_expressions();
     test_phase6_expression_broadcasting_matrix_with_vector();
     test_phase6_expression_broadcasting_three_dimensions();
+    test_phase7_basic_autograd_state();
+    test_phase7_autograd_addition();
+    test_phase7_autograd_subtraction();
+    test_phase7_autograd_multiplication();
+    test_phase7_autograd_division();
+    test_phase7_autograd_unary_negation();
+    test_phase7_autograd_relu();
+    test_phase7_autograd_repeated_tensor_usage();
+    test_phase7_autograd_quadratic_expression();
+    test_phase7_autograd_broadcasting_gradient();
+    test_phase7_sum_to_shape();
+    test_phase7_autograd_mm_gradient();
+    test_phase7_no_grad_guard();
     test_factories();
 
     if (failures != 0) {
